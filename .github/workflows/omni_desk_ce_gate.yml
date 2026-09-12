@@ -1,0 +1,63 @@
+# Fail Omni Desk PRs that touch enterprise/, omit the CE compose file,
+# or pin a chatwoot/chatwoot image that is not a *-ce tag.
+name: Omni Desk CE gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ce-gate:
+    name: CE compose and enterprise guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require Omni Desk compose file
+        run: |
+          compose="docker-compose.omni-desk.yaml"
+          if [ ! -f "$compose" ]; then
+            echo "::error::$compose is required and must exist"
+            exit 1
+          fi
+
+      - name: Require Chatwoot CE image tags
+        run: |
+          compose="docker-compose.omni-desk.yaml"
+          images=$(grep -oE 'chatwoot/chatwoot:[A-Za-z0-9._-]+' "$compose" || true)
+          if [ -z "$images" ]; then
+            echo "::error::$compose must use chatwoot/chatwoot:*-ce"
+            exit 1
+          fi
+
+          failed=0
+          while IFS= read -r image; do
+            tag="${image#chatwoot/chatwoot:}"
+            case "$tag" in
+              *-ce)
+                echo "OK $image"
+                ;;
+              *)
+                echo "::error::Chatwoot image must be *-ce, got $image"
+                failed=1
+                ;;
+            esac
+          done <<< "$images"
+
+          exit "$failed"
+
+      - name: Block enterprise/ paths in the PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          enterprise_paths=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -E '(^|/)enterprise/' || true)
+          if [ -n "$enterprise_paths" ]; then
+            echo "::error::enterprise/ paths are not allowed in Omni Desk PRs"
+            echo "$enterprise_paths"
+            exit 1
+          fi
